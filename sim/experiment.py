@@ -106,29 +106,35 @@ def run_many_experiments(
     """Run multiple Monte Carlo trials for each requested mode."""
 
     master_rng = random.Random(seed)
+    per_mode_stats = {
+        mode: {
+            "config": dataclasses.replace(base_config, mode=mode),
+            "legit": [],
+            "attack": [],
+        }
+        for mode in modes
+    }
+
+    for _ in range(runs):
+        scenario_seed = master_rng.randint(0, 2**31 - 1)
+        for mode, buckets in per_mode_stats.items():
+            scenario_rng = random.Random(scenario_seed)
+            result = simulate_one_run(buckets["config"], rng=scenario_rng)
+            buckets["legit"].append(result.legit_accept_rate)
+            buckets["attack"].append(result.attack_success_rate)
+
     aggregates: List[AggregateStats] = []
-
-    for mode in modes:
-        config = dataclasses.replace(base_config, mode=mode)
-        legit_rates: List[float] = []
-        attack_rates: List[float] = []
-
-        for _ in range(runs):
-            child_seed = master_rng.randint(0, 2**31 - 1)
-            result = simulate_one_run(config, rng=random.Random(child_seed))
-            legit_rates.append(result.legit_accept_rate)
-            attack_rates.append(result.attack_success_rate)
-
+    for mode, buckets in per_mode_stats.items():
+        config = buckets["config"]
         window_value = config.window_size if mode is Mode.WINDOW else 0
-
         aggregates.append(
             AggregateStats(
                 mode=mode,
-                runs=len(legit_rates),
-                avg_legit_rate=_mean(legit_rates),
-                std_legit_rate=_std(legit_rates),
-                avg_attack_rate=_mean(attack_rates),
-                std_attack_rate=_std(attack_rates),
+                runs=len(buckets["legit"]),
+                avg_legit_rate=_mean(buckets["legit"]),
+                std_legit_rate=_std(buckets["legit"]),
+                avg_attack_rate=_mean(buckets["attack"]),
+                std_attack_rate=_std(buckets["attack"]),
                 p_loss=config.p_loss,
                 window_size=window_value,
                 num_legit=config.num_legit,

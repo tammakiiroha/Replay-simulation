@@ -1,19 +1,19 @@
-# 仿真工具详解手册
+# 仿真工具宝宝巴士：一步一步带你玩转 replay 实验
 
-> 目标：帮助阅读者从 0 开始理解整个 replay 仿真框架，包括系统模型、文件职责、运行方式、实验设计与论文写法。可直接用于卒论附录或组会说明。
-
----
-
-## 1. 为什么需要这套仿真
-- **攻击背景**：攻击者可以监听遥控器发送的射频帧，录制后在任意时刻重放。
-- **研究问题**：无防御和不同防御（滚动码 + MAC / 滚动码 + 窗口 / Challenge–Response）在同样攻击模型下，
-  - 重放攻击成功率是多少？
-  - 合法命令被执行的比例是多少？
-- **仿真意义**：将真实遥控协议抽象成可配置的仿真模型，快速比较各方案的安全性与可用性，生成论文所需的表格与图形。
+> 目标：像宝宝巴士讲故事一样，把整个 replay 仿真流程拆成“角色介绍 → 场景布置 → 游戏规则 → 实验玩法 → 结果记录”，让你看完就能自己搭建实验、写论文。适合当成实作指南、附录或演示稿。
 
 ---
 
-## 2. 目录结构与模块对应关系
+## 1. 为什么要搭这个“实验游乐场”
+- **故事背景**：遥控器→小车→攻击者。攻击者偷听遥控器的指令，再在他想要的时候重新播放，这就是 replay 攻击。
+- **我们想回答的问题**：
+  1. 不设防的系统到底有多容易被成功重放？
+  2. 加上不同防御方案之后，攻击成功率能降到多少？合法命令还好不好用？
+- **仿真意义**：把真实遥控协议抽成“玩具模型”，在电脑上反复试验，快速得到论文需要的“安全 vs 可用性”对比表，并且所有步骤都可复现。
+
+---
+
+## 2. 场地布置（目录长这样）
 ```
 Replay/
 ├── main.py                 # 命令行入口，跑单组或少量实验
@@ -31,18 +31,20 @@ Replay/
 │   └── __init__.py         # 统一导出 API
 ├── traces/
 │   └── sample_trace.txt    # 示例命令序列，可替换为真实遥控日志
-├── results/                # 已运行实验的 JSON 输出（图表数据）
+├── results/                # 已运行实验的 JSON 输出（可直接做表格）
 └── docs/                   # 文档目录（包含本手册）
 ```
 
 ---
 
 ## 3. 系统模型（论文可直接引用）
+把所有角色想象成一场宝宝剧：
+
 1. **角色与信道**
    - 发送端（遥控器）：按指定顺序发送命令帧，可附加计数器或 nonce。
    - 接收端（玩具车）：根据防御模式验证帧并决定是否执行。
    - 攻击者：被动监听，记录合法帧，在合法阶段之后或期间重放。
-   - 无线信道：对每一帧以概率 `p_loss` 丢失；攻击者监听也可配置丢包概率 `attacker_loss`。
+   - 无线信道：对每一帧以概率 `p_loss` 丢失；攻击者监听也可配置丢包概率 `attacker_loss`，默认设为 0 代表“攻击者监听条件优于合法接收端”。
 2. **防御模式 (`Mode`)**
    - `no_def`: 永远接受；baseline。
    - `rolling`: 发送端使用单调递增计数器 + MAC；接收端验证 MAC 并要求 `ctr > last_ctr`。
@@ -51,6 +53,7 @@ Replay/
 3. **攻击调度 (`AttackMode`)**
    - `post`: 合法阶段结束后集中重放 `num_replay` 次。
    - `inline`: 正常通信过程中，以概率 `p_inline` 插入最多 `burst` 个重放帧。
+   - 同一次 Monte Carlo run 中，所有模式共享相同的命令序列与丢包抽签（通过复用同一随机种子实现），确保横向比较公平。
 4. **指标**
    - 合法受理率 = `legit_accepted / legit_sent`
    - 攻击成功率 = `attack_success / attack_attempts`
@@ -59,8 +62,10 @@ Replay/
 ---
 
 ## 4. 关键代码行为分解
+可以把下面每个模块当作“游戏规则书”的一部分。
+
 ### 4.1 `sim/types.py`
-- 把所有配置集中在 `SimulationConfig`：
+- `SimulationConfig` 负责记录“这一局要怎么玩”，例如模式、p_loss、窗口大小、随机种子等：
   ```python
   SimulationConfig(
       mode=Mode.ROLLING_MAC,
@@ -127,7 +132,9 @@ Replay/
 ---
 
 ## 5. 操作指南
-### 5.1 运行单组实验
+想把实验真的跑出来，只要跟着下面几个“游戏关卡”走。
+
+### 5.1 第 1 关：单组实验
 ```bash
 python3 main.py \
   --modes no_def rolling window challenge \
@@ -140,9 +147,9 @@ python3 main.py \
   --seed 42 \
   --output-json results/ideal_p0.json
 ```
-输出内容包含 Mode / Runs / Attack / p_loss / Window / 平均成功率 / 标准差。
+跑完后终端会输出一张表，列出 Mode / Runs / Attack / p_loss / Window / 平均成功率 / 标准差。
 
-### 5.2 使用真实命令 trace
+### 5.2 第 2 关：装上真实操作脚本
 ```bash
 python3 main.py \
   --modes rolling window \
@@ -159,7 +166,7 @@ python3 main.py \
 ```
 `traces/sample_trace.txt` 可替换为自己从 URH 导出的实际操作日志。
 
-### 5.3 批量扫描
+### 5.3 第 3 关：一键扫参数
 ```bash
 python3 scripts/run_sweeps.py \
   --runs 300 \
@@ -177,32 +184,30 @@ python3 scripts/run_sweeps.py \
 ```
 - `p_loss` 扫描：window 模式使用 `W=5`
 - `window` 扫描：独立输出，不影响前者
-- 生成的 JSON 可直接导入 Pandas/Excel/Matplotlib 画图
+- 生成的 JSON 可直接导入 Pandas/Excel 生成表格
 
 ---
 
-## 6. 已生成的参考数据
+## 6. 已生成的数据宝箱
 - `results/ideal_p0.json`: 理想信道下四种模式的 baseline
 - `results/p_loss_sweep.json`: inline 攻击 + `W=5` 的丢包扫描
 - `results/window_w{W}_p05.json`: `p_loss=0.05` 时不同窗口大小对合法率/攻击率的影响
 - `results/trace_inline.json`: 使用真实 trace + inline 攻击的验证数据
 
-这些文件中都包含均值和标准差，可以直接做论文的表格或图表（示例见 README 和手册中自带的 LaTeX/Markdown 表）。
+这些文件中都包含均值和标准差，可以直接做论文的表格（示例见 README 和手册中提供的 Markdown 表）。
 
 ---
 
-## 7. 论文写作建议（要点）
-1. **模型描述**：引用本手册第 3 节（角色、防御、攻击、信道），说明仿真假设。
-2. **实验条件**：列出 CLI 参数对应的数值，如 `num_legit=20`, `num_replay=100`, `runs=300`, `p_loss=0~0.2`, `W=5` 等。
-3. **结果展示**：
-   - 表格：理想信道 vs 各模式、p_loss 扫描表、窗口扫描表
-   - 图形：p_loss vs Legit/Attack 曲线、Window vs Legit 折线
-4. **结论与考察**：
-   - 无防御始终 100% 攻击成功
-   - 滚动/窗口在 p_loss 增大时合法率仍占优势，攻击率保持 ~0
-   - `W=1` 虽安全但可用性差，`W=3-5` 是较好的折中
-   - Challenge 模式作为上界，凸显单向滚动方案在硬件简单性上的优势
-5. **实机一致性**：用真实 trace 验证仿真趋势，说明该模型不仅适用于随机序列，也适用于真实遥控操作。
+## 7. 论文写作提示（宝宝版提纲）
+1. **模型描述**：沿用第 3 节的角色+信道+攻击者介绍。
+2. **实验条件**：列出 `num_legit=20`, `num_replay=100`, `runs=300`, `p_loss=0~0.2`, `W=5` 等关键参数。
+3. **结果展示**：直接用 README / `docs/metrics_tables.md` 里的三张表：理想信道、p_loss 扫描、窗口扫描。
+4. **考察要点**：
+   - no_def 重放成功率永远 100%，是对比基准。
+   - rolling/window 在 p_loss 增大时合法率仍高（>0.8），而攻击率接近 0。
+   - Window=1 虽然严格，但合法率只有 62%；Window=3~5 才是实用折中。
+   - Challenge 模式当“上界”，说明单向滚动方案为何更符合现实硬件限制。
+5. **实机一致性**：引用 trace 驱动的实验说明“仿真趋势与真实遥控器一致”。
 
 ---
 
@@ -212,14 +217,14 @@ python3 scripts/run_sweeps.py \
 2. **Challenge 模式是否过于理想？**
    - 是的，它需要双向通信和额外 nonce，因此作为“安全上界”用于对比。论文中可据此讨论实现代价与安全收益。
 3. **如何复现实验？**
-   - 所有命令都支持 `--seed`，用相同 seed + 参数即可复现。
-   - JSON 输出保留了 `p_loss`, `window_size`, `attack_mode` 等字段，便于记录和审查。
+   - 命令行记得加 `--seed`，把参数记录下来即可 100% 复现。
+   - JSON 里带有 `p_loss`, `window_size`, `attack_mode` 等信息，方便审查。
 4. **如何加入更多命令或实际协议？**
-   - 在 `commands.py` 中修改 `DEFAULT_COMMANDS` 或使用 `--commands-file` 输入实际抓包对应的命令表即可。
+   - 编辑 `commands.py` 或导入新的 trace 文件即可。
 
 ---
 
-如需进一步定制（如加入新的攻击模式、统计其它指标、自动绘图脚本），可以在此手册基础上扩展相应模块。
+如需进一步定制（如加入新的攻击模式、统计其它指标、额外的数据导出脚本），可以在此手册基础上扩展相应模块。
 
 ---
 
@@ -333,7 +338,7 @@ return aggregates
 | `--inline-attack-burst` | 1 / 2 | inline 模式一次最多连续插入的攻击帧数量。 |
 | `--challenge-nonce-bits` | 32 | Challenge 模式生成随机 nonce 的位数。 |
 | `--seed` | 无 | 全局随机种子；指定后可以完全复现实验。 |
-| `--output-json` | 无 | 将本次 `AggregateStats` 保存为 JSON，方便绘图或写论文表格。 |
+| `--output-json` | 无 | 将本次 `AggregateStats` 保存为 JSON，方便制作论文表格。 |
 | `--p-loss-values`（sweep） | `[0, 0.01, 0.05, 0.1, 0.2]` | `run_sweeps.py` 用来批量扫描的丢包率列表。 |
 | `--window-values`（sweep） | `[1, 3, 5, 7, 9]` | `run_sweeps.py` 用来批量扫描的窗口宽度列表。 |
 | `--window-size-base`（sweep） | 5 | 在 `p_loss` 扫描中，window 模式使用的固定窗口大小，避免被 `--window-values` 覆盖。 |
